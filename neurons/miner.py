@@ -39,6 +39,254 @@ from bitrecs.llms.factory import LLM, LLMFactory
 from bitrecs.utils.runtime import execute_periodically
 from bitrecs.utils.uids import best_uid
 from bitrecs.utils.version import LocalMetadata
+from bitrecs.commerce.product import Product, ProductFactory
+
+import re
+import random
+from difflib import SequenceMatcher
+from itertools import groupby
+from collections.abc import Callable
+
+
+# Gender and season patterns
+gender_patterns = {
+    "men": r"\bmen('?s)?\b|\bmale\b",
+    "women": r"\bwomen('?s)?\b|\blad(y|ies)\b|\bfemale\b",
+    "unisex": r"\bunisex\b",
+    "boys": r"\bboys?\b(?!.*girls?)",
+    "girls": r"\bgirls?\b(?!.*boys?)",
+    "kids": r"\bchildren\b|\bchild\b|\bbaby\b|\binfant\b",
+}
+
+season_patterns = {
+    "summer": r"\bsummer\b",
+    "winter": r"\bwinter\b",
+    "spring": r"\bspring\b",
+    "autumn": r"\bautumn\b|\bfall\b",
+    "all-season": r"\ball[- ]season\b",
+}
+
+MIN_MAIN_CATEGORIES = 1  # Minimum main categories required
+
+# -------------------- Helper Functions --------------------
+
+def sort_with_random_tiebreak(items, key):
+    """
+    Sort items by a key (string or callable), but randomize order when key values are the same.
+
+    Args:
+        items (list): List of dicts, tuples, etc.
+        key (str | callable): 
+            - If str: field name for dicts
+            - If callable: function applied to each item (like in sorted())
+
+    Returns:
+        list: Sorted list with randomized tie groups
+    """
+    # If key is a string, wrap it into a function
+    if not isinstance(key, Callable):
+        field = key
+        keyfunc = lambda x: x[field]
+    else:
+        keyfunc = key
+
+    # Step 1: Sort items
+    items_sorted = sorted(items, key=keyfunc)
+
+    # Step 2: Shuffle within groups of identical keys
+    result = []
+    for _, group in groupby(items_sorted, key=keyfunc):
+        group_list = list(group)
+        random.shuffle(group_list)
+        result.extend(group_list)
+
+    return result
+
+def normalize_category(cat: str) -> str:
+    cat = cat.lower()
+    cat = re.sub(r"[^\w\s]", "", cat)
+    cat = cat.strip()
+    if cat.endswith("s") and len(cat) > 3:
+        cat = cat[:-1]
+    return cat
+
+def extract_product_info(product_name: str):
+    parts = product_name.split(" - ", 1)
+    if len(parts) < 2:
+        return set(), set(), set()
+    raw_categories = [c.strip() for c in parts[1].split("|")]
+    found_genders = set()
+    found_seasons = set()
+    clean_categories = set()
+    for cat in raw_categories:
+        cat_norm = normalize_category(cat)
+        for g, pattern in gender_patterns.items():
+            if re.search(pattern, cat.lower()):
+                found_genders.add(g)
+        for s, pattern in season_patterns.items():
+            if re.search(pattern, cat.lower()):
+                found_seasons.add(s)
+        clean_categories.add(cat_norm)
+    main_categories = clean_categories - found_genders - found_seasons
+    bt.logging.trace(f"Extracted from '{product_name}': Main: {main_categories}, Genders: {found_genders}, Seasons: {found_seasons}")
+    return main_categories, found_genders, found_seasons
+
+def fuzzy_match(cat1: str, cat2: str, threshold: float = 0.7) -> bool:
+    ratio = SequenceMatcher(None, cat1, cat2).ratio()
+    return ratio >= threshold
+
+def gender_compatible(selected_gender_set, product_gender_set):
+    """Strict gender compatibility."""
+    if selected_gender_set == product_gender_set:
+        return True
+    for sel in selected_gender_set:
+        for prod in product_gender_set:
+            if sel == prod or sel == "unisex" or prod == "unisex":
+                return True
+    return False
+
+def parse_season_string(season_string: str):
+    """Parse season string like 'Summer/All-Season' or 'Summer | Winter' into set."""
+    season_string = season_string.replace("/", "|")
+    parts = [s.strip().lower() for s in season_string.split("|")]
+    return set(parts)
+
+# -------------------- Main Recommendation Function --------------------
+
+def recommend_products_top_n_dict(selected: Product, catalog: list[Product], top_n: int = 5, season_string: str = None):
+    """
+    Recommend top_n products from catalog (dictionary type).
+    Tier1 & Tier2: sorted by score
+    Tier3 & Tier4: randomly shuffled
+    """
+    # Filter out products with too few main categories
+    cleaned_catalog = [p for p in catalog if len(extract_product_info(p.name)[0]) >= MIN_MAIN_CATEGORIES]
+
+    # Extract info from selected product
+    selected_main, selected_gender, selected_season = extract_product_info(selected.name)
+    selected_season = set(s.lower() for s in selected_season)
+
+    # Parse preferred seasons
+    if season_string:
+        preferred_seasons = parse_season_string(season_string)
+        preferred_seasons = selected_season | preferred_seasons
+    else:
+        preferred_seasons = selected_season
+
+    # Helper function to compute score
+    def compute_score(main, sel_main, season, selected_season):
+        exact_overlap = sel_main & main
+        fuzzy_overlap = set()
+        for cat in main:
+            for sel_cat in sel_main:
+                if fuzzy_match(cat, sel_cat):
+                    fuzzy_overlap.add(cat)
+        score = len(exact_overlap)*3 + len(fuzzy_overlap)
+        if selected_season & season:
+            score += 5  # boost if matches selected product's season
+        return score, exact_overlap, fuzzy_overlap
+
+    # Tiered lists
+    tier1, tier2, tier3, tier4 = [], [], [], []
+
+    for product in cleaned_catalog:
+        if product.sku == selected.sku:
+            continue
+        main, gender, season = extract_product_info(product.name)
+        season = set(s.lower() for s in season)
+        score, exact_overlap, fuzzy_overlap = compute_score(main, selected_main, season, selected_season)
+
+        # Assign product to appropriate tier
+        if gender_compatible(selected_gender, gender) and (selected_season & season):
+            tier1.append((product, score, exact_overlap, fuzzy_overlap))
+            bt.logging.trace(f"Tier1: {product.sku} Score: {score} Exact: {exact_overlap} Fuzzy: {fuzzy_overlap}")
+        elif gender_compatible(selected_gender, gender) and (preferred_seasons & season):
+            tier2.append((product, score, exact_overlap, fuzzy_overlap))
+            bt.logging.trace(f"Tier2: {product.sku} Score: {score} Exact: {exact_overlap} Fuzzy: {fuzzy_overlap}")
+        elif gender_compatible(selected_gender, gender):
+            tier3.append((product, score, exact_overlap, fuzzy_overlap))
+            bt.logging.trace(f"Tier3: {product.sku} Score: {score} Exact: {exact_overlap} Fuzzy: {fuzzy_overlap}")
+        else:
+            tier4.append((product, score, exact_overlap, fuzzy_overlap))
+            bt.logging.trace(f"Tier4: {product.sku} Score: {score} Exact: {exact_overlap} Fuzzy: {fuzzy_overlap}")
+
+    # Sort Tier1 & Tier2 by score descending
+    sort_with_random_tiebreak(tier1, key=lambda x: -x[1])
+    sort_with_random_tiebreak(tier2, key=lambda x: -x[1])
+    sort_with_random_tiebreak(tier3, key=lambda x: -x[1])
+    sort_with_random_tiebreak(tier3, key=lambda x: -x[1])
+
+    # Combine tiers and take top_n
+    recommended = tier1 + tier2 + tier3 + tier4
+    return recommended[:top_n]
+
+
+async def do_fast_work(user_prompt: str,
+                       context: str,
+                       num_recs: int,
+                       server: LLM,
+                       model: str,
+                       system_prompt="You are a helpful assistant.",
+                       profile : UserProfile = None,
+                       debug_prompts=False) -> List[str]:
+    """
+    Fast miner work is done here.
+    """
+    bt.logging.info(f"do_fast_work Prompt: {user_prompt}")
+    bt.logging.info(f"do_fast_work LLM server: {server}")
+    bt.logging.info(f"do_fast_work LLM model: {model}")
+    bt.logging.trace(f"do_fast_work profile: {profile}")
+
+    store_catalog : list[Product] = ProductFactory.try_parse_context_strict(context)
+    if store_catalog is None or len(store_catalog) < CONST.MIN_CATALOG_SIZE:
+        bt.logging.error("Catalog is empty or invalid.")
+        return []
+
+    # Find the selected product in the catalog
+    selected_product = next((p for p in store_catalog if p.sku == user_prompt), None)
+    if selected_product is None:
+        bt.logging.error(f"Selected product SKU {user_prompt} not found in catalog.")
+        return []
+
+    # Determine preferred seasons from user profile
+    recommended = recommend_products_top_n_dict(selected=selected_product,
+                                                catalog=store_catalog,
+                                                top_n=num_recs,
+                                                season_string=PromptFactory.SEASON)
+    if recommended is None or len(recommended) == 0:
+        bt.logging.error("No recommendations generated.")
+        return []
+
+    for item in recommended:
+        bt.logging.trace(f"Recommended: {item[0].sku} Score: {item[1]} Exact: {item[2]} Fuzzy: {item[3]}")
+
+    final_recommendations = [item[0] for item in recommended]
+
+    factory = PromptFactory(sku=user_prompt,
+                            context=context,
+                            num_recs=num_recs,
+                            debug=debug_prompts,
+                            profile=profile)
+    prompt = factory.generate_reason_prompt(final_recommendations)
+    try:
+        llm_response = LLMFactory.query_llm(server=server,
+                                            model=model,
+                                            system_prompt=system_prompt,
+                                            temp=0.0, user_prompt=prompt)
+        if not llm_response or len(llm_response) < 10:
+            bt.logging.error("LLM response is empty.")
+            return []
+
+        parsed_recs = PromptFactory.tryparse_llm(llm_response)
+        if debug_prompts:
+            bt.logging.trace(f" {llm_response} ")
+            bt.logging.trace(f"LLM response: {parsed_recs}")
+
+        return parsed_recs
+    except Exception as e:
+        bt.logging.error(f"Error calling LLM: {e}")
+
+    return []
 
 
 async def do_work(user_prompt: str,
@@ -187,13 +435,22 @@ class Miner(BaseMinerNeuron):
         user_profile = UserProfile.tryparse_profile(synapse.user)
 
         try:
-            results = await do_work(user_prompt=query,
-                                    context=context, 
-                                    num_recs=num_recs, 
-                                    server=server, 
-                                    model=model, 
-                                    profile=user_profile,
-                                    debug_prompts=debug_prompts)            
+            results = await do_fast_work(user_prompt=query,
+                                        context=context,
+                                        num_recs=num_recs,
+                                        server=server,
+                                        model=model,
+                                        profile=user_profile,
+                                        debug_prompts=debug_prompts)
+            if result is None or len(results) < num_recs:
+                bt.logging.warning(f"Fast work failed or insufficient results ({len(results)}), falling back to full do_work")
+                results = await do_work(user_prompt=query,
+                                        context=context,
+                                        num_recs=num_recs,
+                                        server=server,
+                                        model=model,
+                                        profile=user_profile,
+                                        debug_prompts=debug_prompts)
             bt.logging.info(f"LLM {self.model} - Results: count ({len(results)})")
         except Exception as e:
             bt.logging.error(f"\033[31mFATAL ERROR calling do_work: {e!r} \033[0m")

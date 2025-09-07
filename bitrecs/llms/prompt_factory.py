@@ -8,6 +8,7 @@ from typing import List, Optional
 from datetime import datetime
 from bitrecs.commerce.user_profile import UserProfile
 from bitrecs.commerce.product import ProductFactory
+from bitrecs.commerce.product import Product
 
 class PromptFactory:
 
@@ -198,6 +199,49 @@ class PromptFactory:
 
         return prompt
     
+
+    def generate_reason_prompt(self, recommended: list[Product]) -> str:
+        """Generates a text prompt product recommendations with reasons."""
+        bt.logging.info("PROMPT generating reason prompt: {}".format(self.sku))
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        season = self.season
+        persona_data = self.PERSONAS[self.persona]
+
+        prompt = f"""# CONTEXT
+You are an AI product recommendation assistant for an e-commerce store.
+Your persona: friendly, helpful, persuasive, concise, focused on relevance, seasonal trends, and customer satisfaction.
+
+# INPUT
+Query product SKU: <sku>{self.sku}</sku> named <sku_info>{self.sku_info}</sku_info>.
+Selected recommended products:
+<selected>
+{json.dumps([r.to_dict() for r in recommended], separators=(',', ':'))}
+</selected>
+
+# TASK
+For each recommended product, add a field "reason" that explains why it is recommended in your persona voice.
+Do NOT change existing fields (sku, name, price).
+Each reason must be a single plain sentence without punctuation or line breaks.
+You will be graded on your reason so make sure to provide a good reason for each recommendation which is relevant to the Query SKU.
+Return ONLY a JSON array corresponding to the selected recommendations.
+
+Example format:
+
+[{{"sku": "XYZ", "name": "Hunter Original Play Boot Chelsea", "price": "115", "reason": "User is viewing rainboots, we recommend this alternative pair of rainboots which is our best seller"}},
+ {{"sku": "ABC", "name": "Men's Lightweight Hooded Rain Jacket", "price": "149", "reason": "Since the user is looking at mens rainboots, given the season a mens raincoat should be a good fit"}},
+ {{"sku": "DEF", "name": "Davek Elite Umbrella", "price": "159", "reason": "An Umbrella would go nicely with ABC Lightweight Hooded Rain Jacket and is often paired with it"}}]"""
+
+        prompt_length = len(prompt)
+        bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")
+
+        if self.debug:
+            token_count = PromptFactory.get_token_count(prompt)
+            bt.logging.info(f"LLM QUERY Prompt Token count: {token_count}")
+            bt.logging.debug(f"Prompt: {prompt}")
+            #print(prompt)
+
+        return prompt
     
     @staticmethod
     def get_token_count(prompt: str, encoding_name: str="o200k_base") -> int:
