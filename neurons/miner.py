@@ -442,7 +442,7 @@ class Miner(BaseMinerNeuron):
                                         model=model,
                                         profile=user_profile,
                                         debug_prompts=debug_prompts)
-            if result is None or len(results) < num_recs:
+            if results is None or len(results) < num_recs:
                 bt.logging.warning(f"Fast work failed or insufficient results ({len(results)}), falling back to full do_work")
                 results = await do_work(user_prompt=query,
                                         context=context,
