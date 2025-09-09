@@ -276,8 +276,14 @@ async def do_fast_work(user_prompt: str,
     except:
         selected_name = None
     for rec in recommendations:
-        reason = f"We recommend it based on your interest in {selected_name}" if selected_name else f"We recommend {rec.name}"
+        reason = "We recommend it based on your interest"
+        try:
+            rec_name = rec.name.split(" - ", 1)[0]
+            reason = f"We recommend {rec_name} as a great choice"
+        except:
+            pass
         if selected_name is not None:
+            reason = f"We recommend it based on your interest in {selected_name}"
             try:
                 rec_name = rec.name.split(" - ", 1)[0]
                 rec_main, rec_gender, rec_season = extract_product_info(rec.name)

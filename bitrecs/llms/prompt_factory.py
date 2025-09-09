@@ -225,6 +225,7 @@ Each item must include ONLY the following fields:
 - "sku": must be exactly one of the given SKUs in the selected recommendations
 - "reason": one short sentence in plain words without punctuation
 You will be graded on your reason so make sure to provide a good reason for each recommendation which is relevant to the Query product SKU.
+The reason should be well understood and familiar to a customer.
 
 Example format:
 
