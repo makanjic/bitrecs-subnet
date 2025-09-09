@@ -270,12 +270,32 @@ async def do_fast_work(user_prompt: str,
     prompt = factory.generate_reason_prompt(recommendations)
 
     final_recommendations = []
+    try:
+        selected_name = selected_product.name.split(" - ", 1)[0]
+        selected_main, selected_gender, selected_season = extract_product_info(selected.name)
+    except:
+        selected_name = None
     for rec in recommendations:
+        reason = f"We recommend it based on your interest in {selected_name}" if selected_name else f"We recommend {rec.name}"
+        if selected_name is not None:
+            try:
+                rec_name = rec.name.split(" - ", 1)[0]
+                rec_main, rec_gender, rec_season = extract_product_info(rec.name)
+
+                if rec_main == selected_main:
+                    reason = f"{rec_name} is a perfect companion to {selected_name}"
+                elif rec_main & selected_main:
+                    reason = f"{rec_name} is a great {rec_gender} option for {selected_name}"
+                else:
+                    reason = f"{rec_name} complements {selected_name}"
+            except:
+                pass
+
         final_recommendations.append({
             "sku": rec.sku,
             "name": rec.name,
             "price": rec.price,
-            "reason": ""  # to be filled by LLM
+            "reason": reason
         })
 
     try:
@@ -296,21 +316,22 @@ async def do_fast_work(user_prompt: str,
             sku = rec.get("sku", None)
             if sku is None or not any(p.sku == sku for p in store_catalog):
                 bt.logging.error(f"LLM returned invalid SKU: {sku}")
-                # continue
-                return []
+                continue
+                # return []
             reason = rec.get("reason", None)
             if reason is None or len(reason) < 10:
                 bt.logging.error(f"LLM returned invalid reason for SKU {sku}: {reason}")
-                # continue
-                return []
+                continue
+                # return []
             recommend = next((p for p in final_recommendations if p["sku"] == sku), None)
             if recommend is None:
                 bt.logging.error(f"SKU {sku} not found in recommendations list.")
-                # continue
-                return []
-            bt.logging.info(f"Final Recommended: {sku} Reason: {reason}")
+                continue
+                # return []
+            bt.logging.trace(f"Final Recommended: {sku} Reason: {reason}")
             recommend["reason"] = reason
 
+        bt.logging.trace(f"Final Recommendations: {final_recommendations}")
         return final_recommendations
     except Exception as e:
         bt.logging.error(f"Error calling LLM: {e}")
