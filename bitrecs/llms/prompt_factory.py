@@ -220,17 +220,21 @@ Selected recommended products:
 </selected>
 
 # TASK
-For each recommended product, add a field "reason" that explains why it is recommended in your persona voice.
-Do NOT change existing fields (sku, name, price).
-Each reason must be a single plain sentence without punctuation or line breaks.
-You will be graded on your reason so make sure to provide a good reason for each recommendation which is relevant to the Query SKU.
 Return ONLY a JSON array corresponding to the selected recommendations.
+Each item must include ONLY the following fields:
+- "sku": must be exactly one of the given SKUs in the selected recommendations
+- "reason": one short sentence in plain words without punctuation
+You will be graded on your reason so make sure to provide a good reason for each recommendation which is relevant to the Query product SKU.
 
 Example format:
 
-[{{"sku": "XYZ", "name": "Hunter Original Play Boot Chelsea", "price": "115", "reason": "User is viewing rainboots, we recommend this alternative pair of rainboots which is our best seller"}},
- {{"sku": "ABC", "name": "Men's Lightweight Hooded Rain Jacket", "price": "149", "reason": "Since the user is looking at mens rainboots, given the season a mens raincoat should be a good fit"}},
- {{"sku": "DEF", "name": "Davek Elite Umbrella", "price": "159", "reason": "An Umbrella would go nicely with ABC Lightweight Hooded Rain Jacket and is often paired with it"}}]"""
+[{{"sku": "XYZ", "reason": "User is viewing rainboots, we recommend this alternative pair of rainboots which is our best seller"}},
+ {{"sku": "ABC", "reason": "Since the user is looking at mens rainboots, given the season a mens raincoat should be a good fit"}},
+ {{"sku": "DEF", "reason": "An Umbrella would go nicely with ABC Lightweight Hooded Rain Jacket and is often paired with it"}}]
+
+# IMPORTANT
+Do not add or remove SKUs. The order of SKUs must be the same as selected recommended products.
+No explanations or text outside the JSON array."""
 
         prompt_length = len(prompt)
         bt.logging.info(f"LLM QUERY Prompt length: {prompt_length}")

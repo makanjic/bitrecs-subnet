@@ -260,14 +260,24 @@ async def do_fast_work(user_prompt: str,
     for item in recommended:
         bt.logging.trace(f"Recommended: {item[0].sku} Score: {item[1]} Exact: {item[2]} Fuzzy: {item[3]}")
 
-    final_recommendations = [item[0] for item in recommended]
+    recommendations = [item[0] for item in recommended]
 
     factory = PromptFactory(sku=user_prompt,
                             context=context,
                             num_recs=num_recs,
                             debug=debug_prompts,
                             profile=profile)
-    prompt = factory.generate_reason_prompt(final_recommendations)
+    prompt = factory.generate_reason_prompt(recommendations)
+
+    final_recommendations = []
+    for rec in recommendations:
+        final_recommendations.append({
+            "sku": rec.sku,
+            "name": rec.name,
+            "price": rec.price,
+            "reason": ""  # to be filled by LLM
+        })
+
     try:
         llm_response = LLMFactory.query_llm(server=server,
                                             model=model,
@@ -282,7 +292,26 @@ async def do_fast_work(user_prompt: str,
             bt.logging.trace(f" {llm_response} ")
             bt.logging.trace(f"LLM response: {parsed_recs}")
 
-        return parsed_recs
+        for rec in parsed_recs:
+            sku = rec.get("sku", None)
+            if sku is None or not any(p.sku == sku for p in store_catalog):
+                bt.logging.error(f"LLM returned invalid SKU: {sku}")
+                # continue
+                return []
+            reason = rec.get("reason", None)
+            if reason is None or len(reason) < 10:
+                bt.logging.error(f"LLM returned invalid reason for SKU {sku}: {reason}")
+                # continue
+                return []
+            recommend = next((p for p in final_recommendations if p["sku"] == sku), None)
+            if recommend is None:
+                bt.logging.error(f"SKU {sku} not found in recommendations list.")
+                # continue
+                return []
+            bt.logging.info(f"Final Recommended: {sku} Reason: {reason}")
+            recommend["reason"] = reason
+
+        return final_recommendations
     except Exception as e:
         bt.logging.error(f"Error calling LLM: {e}")
 
