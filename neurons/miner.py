@@ -291,7 +291,7 @@ async def do_fast_work(user_prompt: str,
                 if rec_main == selected_main:
                     reason = f"{rec_name} is a perfect companion to {selected_name}"
                 elif rec_main & selected_main:
-                    reason = f"{rec_name} is a great {rec_gender} option for {selected_name}"
+                    reason = f"{rec_name} is a great option for {selected_name}"
                 else:
                     reason = f"{rec_name} complements {selected_name}"
             except:
